@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+
+[tool.setuptools_scm]
+version_file = "src/validate/__version__.py"
+
+[project]
+name = "validate"
+authors = [{ name = "JJ Kavelaars", email = "JJ.Kavelaars@nrc-cnrc.gc.ca" }]
+description = "Using a list of mocas/ssois search results validate observations of given object"
+readme = "README.md"
+keywords = ["astronomy", "database", "STC"]
+license = { text= "GPLv3 or later" }
+dependencies = [
+    "astropy",
+    "numpy",
+    "pyds9",
+    "mp_ephem",
+    "vos",
+    "cadctap",
+]
+classifiers = ["Programming Language :: Python :: 3"]
+dynamic = ["version"]
+
+[project.scripts]
+validate = "validate.cli:main"
