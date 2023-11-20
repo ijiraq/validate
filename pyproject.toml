@@ -16,6 +16,7 @@ dependencies = [
     "numpy",
     "pyds9",
     "mp_ephem",
+    "photutils",
     "vos",
     "cadctap",
 ]
