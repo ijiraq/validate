@@ -4,6 +4,7 @@ The validate app
 import math
 import sys
 from astropy.time import Time
+from astropy import units
 from mp_ephem import ObsRecord, BKOrbit
 from photutils.aperture import aperture_photometry, CircularAperture, CircularAnnulus, ApertureStats
 from .display import Display
@@ -34,17 +35,22 @@ class ObservationValidator:
         hdulist = artifact.hdulist
         try:
             self.display.load(hdulist)
+            if not artifact.downloaded:
+                logging.warning(f"Image {artifact.observation_id} not downloaded (press z to refresh).")
+                return
             self.trial_orbit.predict(Time(artifact.obs_date, format='mjd'))
             self.display.focus = self.trial_orbit.coordinate
             logging.debug(f"{artifact.observation_id} -> {artifact.obs_record}")
-            colour = ( 'yellow' if artifact.obs_record is None
-                       else 'green' if not artifact.obs_record.null_observation
-            else 'red' )
+            colour = ('yellow' if artifact.obs_record is None
+                      else 'green' if not artifact.obs_record.null_observation else 'red')
             self.display.mark_ellipse(self.trial_orbit.coordinate,
                                       self.trial_orbit.dra,
                                       self.trial_orbit.ddec,
                                       self.trial_orbit.pa,
                                       colour=colour)
+            if artifact.obs_record is not None:
+                self.display.mark_cirlce(artifact.obs_record.coordinate,
+                                         radius=2*units.arcsec, colour=colour)
         except Exception as ex:
             logging.error(f"Failed to display {hdulist} : {ex}")
 
@@ -79,13 +85,12 @@ class ObservationValidator:
         new_obs_record = build_obs_record(hdu.header, mag=mag, merr=merr, x=x, y=y, ra=ra, dec=dec,
                                           null_observation=null_observation)
         artifact.obs_record = new_obs_record
-        self.obs_records[f"{artifact.obs_date:.6g}"] = new_obs_record
+        self.obs_records[artifact.key] = new_obs_record
         self.update_trial_orbit()
 
     def update_trial_orbit(self):
         self.trial_orbit = BKOrbit(list(self.obs_records.values()))
         print(self.trial_orbit.summarize())
-
 
     def display_help(self):
         for key in self.commands:
@@ -100,6 +105,7 @@ class ObservationValidator:
                 'p': ['Previous Frame', self.display_previous_artifact],
                 'c': ['Load comparison', self.display_comparison_artifact],
                 'r': ['Reject observation', self.measure_current_source],
+                'z': ['Refresh the display', self.display_current_artifact],
                 '?': ['Help', self.display_help]
                 }
 

@@ -53,6 +53,8 @@ class Display(object):
                 self.ds9 = pyds9.DS9('validate')
                 self.ds9.set('frame delete all')
                 self.ds9.set('frame new')
+                self.ds9.set('zoom to 4')
+                self.ds9.set('wcs align yes')
                 break
             except ValueError as ex:
                 logging.critical(f"Waiting for ds9 to start: {ex}")
@@ -82,12 +84,10 @@ class Display(object):
         """
         if hdulist is not None:
             # Get centre of
-            with contextlib.closing(BytesIO()) as newFitsFile:
+            with (contextlib.closing(BytesIO()) as newFitsFile):
                 hdulist.writeto(newFitsFile)
-                newfits = newFitsFile.getvalue()
-                got = self.ds9.set('fits mosaicimage wcs', newfits, len(newfits))
-                self.ds9.set('zoom to 4')
-                self.ds9.set('wcs align yes')
+                temp_fits = newFitsFile.getvalue()
+                self.ds9.set('fits mosaicimage wcs', temp_fits, len(temp_fits))
         else:
             self.ds9.set('frame new')
         return int(self.ds9.get('frame frameno'))
@@ -199,6 +199,10 @@ class Display(object):
 
     def mark_annuli(self, x, y, annuli, colour='b'):
         r = Region((x, y), style='annulus', colour=colour, shape=annuli)
+        self.ds9.set(*r)
+
+    def mark_cirlce(self, position, radius, colour='b'):
+        r = Region(position, style='circle', colour=colour, shape=radius)
         self.ds9.set(*r)
 
     def mark_ellipse(self, position, a, b, angle, colour='b'):

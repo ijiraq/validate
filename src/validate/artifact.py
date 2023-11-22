@@ -1,17 +1,24 @@
 """
 The observation class holds all the meta information about an observation.
 """
+import os
+import inspect
 import logging
 from dataclasses import dataclass, field
 from astropy import units
 from astropy.coordinates import SkyCoord
-from astropy.io.fits import HDUList
+from astropy.io import fits
 from astropy.table import Row
 from astropy.units import Quantity
+
 from mocas.cadc_archive_tap_client import CADCArchiveTapClient
 
-from .downloaders import VOSpaceDownloader, VOSpaceFITSCutoutDownloader
+from .downloaders import VOSpaceFITSCutoutDownloader
 band_filter_map = {'gri.MP9605': 'w'}
+
+WAITING_IMAGE_PATH = os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())),
+                                  'data',
+                                  'waiting.fits')
 
 
 @dataclass
@@ -21,6 +28,9 @@ class ApertureCorrection:
     ccd_num: int
     apcor_uri: str = field(init=False)
 
+
+def key_from_mjd(mjdate):
+    return f"{mjdate:.3f}"
 
 @dataclass
 class DBImagesArtifact:
@@ -33,16 +43,21 @@ class DBImagesArtifact:
     observation_id: str = field(init=False)
     dbimages_uri: str = field(init=False)
     cutout_radius: Quantity = field(init=False)
-    hdulist: HDUList = None
+    hdulist: fits.HDUList = None
     apcor_uri: str = None
     comparison: object = None
     obs_record: object = None
+    downloaded: bool = False
 
     def __post_init__(self):
         self.observation_id = self.frame.split('p')[0]
         self.dbimages_uri = f"dbimages:{self.observation_id}/{self.observation_id}p.fits"
         self.cutout_radius = 3*max(self.ephemeris_uncertainty[:2])
-        self.key = f"{self.obs_date:.3f}"
+        self.key = key_from_mjd(self.obs_date)
+        with fits.open(WAITING_IMAGE_PATH, lazy_load_hdus=False) as waiting_image:
+            self.hdulist = fits.HDUList([fits.PrimaryHDU(),
+                                         fits.ImageHDU(data=waiting_image[1].data,
+                                                       header=waiting_image[1].header)])
 
     def get_apcor_uri(self, extname):
         """
@@ -52,6 +67,7 @@ class DBImagesArtifact:
         return f"dbimages:{self.observation_id}/{extname}/{self.observation_id}p{ccd_num:02d}.apcor"
 
     def set_hdulist(self, hdulist):
+        self.downloaded = True
         self.hdulist = hdulist
 
 
@@ -93,6 +109,7 @@ class ComparisonImageFinder:
                  f"WHERE INTERSECTS ( CIRCLE ('ICRS', {ra}, {dec}, 0.02), p.position_bounds ) = 1 "
                  f"AND observationID != '{observation_id}'")
         return self.tap_client.get_table(query)
+
 
 def dbimages_artifact_from_ssois_row(row: Row):
     return DBImagesArtifact(row['Image'],
