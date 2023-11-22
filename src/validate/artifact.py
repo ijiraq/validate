@@ -27,6 +27,8 @@ class DBImagesArtifact:
     frame: str
     predicted_coordinate: SkyCoord
     ephemeris_uncertainty: (Quantity, Quantity, Quantity)
+    obs_date: float
+    key: str = None
     # cutout: HDUList = field(default_factory=HDUList)
     observation_id: str = field(init=False)
     dbimages_uri: str = field(init=False)
@@ -34,11 +36,13 @@ class DBImagesArtifact:
     hdulist: HDUList = None
     apcor_uri: str = None
     comparison: object = None
+    obs_record: object = None
 
     def __post_init__(self):
         self.observation_id = self.frame.split('p')[0]
         self.dbimages_uri = f"dbimages:{self.observation_id}/{self.observation_id}p.fits"
-        self.cutout_radius = max(self.ephemeris_uncertainty[:2])
+        self.cutout_radius = 3*max(self.ephemeris_uncertainty[:2])
+        self.key = f"{self.obs_date:.3f}"
 
     def get_apcor_uri(self, extname):
         """
@@ -46,6 +50,9 @@ class DBImagesArtifact:
         """
         ccd_num = int(self.hdulist[extname].header['EXTVER'])
         return f"dbimages:{self.observation_id}/{extname}/{self.observation_id}p{ccd_num:02d}.apcor"
+
+    def set_hdulist(self, hdulist):
+        self.hdulist = hdulist
 
 
 class ComparisonImageFinder:
@@ -60,32 +67,37 @@ class ComparisonImageFinder:
         """
         Find an image that is not artifact that overlaps in sky area.
         """
-        query = (f"SELECT observationID FROM caom2.Plane p JOIN caom2.Observation o ON p.obsID=o.obsID WHERE "
-                 f"INTERSECTS "
-                 f"( CIRCLE('ICRS', "
-                 f"{artifact.predicted_coordinate.ra.degree}, "
-                 f"{artifact.predicted_coordinate.dec.degree}, "
-                 f"0.02), "
-                 f"p.position_bounds ) = 1 "
-                 f"AND observationID != '{artifact.observation_id}'")
-        result = self.tap_client.get_table(query)
-        comparison_id = None
-        for row in result:
-            if row['observationID'] in self.available_observation_ids:
-                comparison_id = row['observationID']
-                try:
-                    artifact = DBImagesArtifact(comparison_id, artifact.predicted_coordinate, artifact.ephemeris_uncertainty)
-                    artifact.hdulist = self.vospace_fits_cutout_downloader(artifact.dbimages_uri,
-                                                                           artifact.predicted_coordinate,
-                                                                           artifact.cutout_radius)
-                    return artifact
-                except Exception as ex:
-                    logging.warning(f"Failed to download comparison image {comparison_id}: {ex}")
+        overlaping_observations = self.get_list_of_overlapintg_observations_in_cadc_archive(
+            artifact.predicted_coordinate.ra.degree,
+            artifact.predicted_coordinate.dec.degree,
+            artifact.observation_id)
+        for row in overlaping_observations:
+            if row['observationID'] not in self.available_observation_ids:
+                continue
+            try:
+                artifact = DBImagesArtifact(row['observationID'],
+                                            artifact.predicted_coordinate,
+                                            artifact.ephemeris_uncertainty,
+                                            artifact.obs_date)
+                artifact.hdulist = self.vospace_fits_cutout_downloader(artifact.dbimages_uri,
+                                                                       artifact.predicted_coordinate,
+                                                                       artifact.cutout_radius)
+                return artifact
+            except Exception as ex:
+                logging.warning(f"Failed to download comparison image {row['observationID']}: {ex}")
         return None
 
-def dbimages_artifact_from_mocas_row(row: Row):
+    def get_list_of_overlapintg_observations_in_cadc_archive(self, ra: float, dec: float, observation_id: str):
+        query = (f"SELECT observationID, (p.time_bounds_upper+p.time_bounds_lower)/2.0 as mjd  "
+                 f"FROM caom2.Plane p JOIN caom2.Observation o ON p.obsID=o.obsID "
+                 f"WHERE INTERSECTS ( CIRCLE ('ICRS', {ra}, {dec}, 0.02), p.position_bounds ) = 1 "
+                 f"AND observationID != '{observation_id}'")
+        return self.tap_client.get_table(query)
+
+def dbimages_artifact_from_ssois_row(row: Row):
     return DBImagesArtifact(row['Image'],
                             SkyCoord(row['Object_RA'], row['Object_Dec'], unit='deg'),
                             (row['dra'] * units.arcsec,
                              row['ddec'] * units.arcsec,
-                             row['PA'] * units.deg))
+                             row['PA'] * units.deg),
+                            row['MJD'])

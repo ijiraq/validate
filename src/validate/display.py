@@ -1,6 +1,6 @@
 import contextlib
 import logging
-
+import time
 import pyds9
 from io import BytesIO
 from astropy.coordinates import SkyCoord
@@ -47,9 +47,17 @@ class DisplayError(Exception):
 class Display(object):
 
     def __init__(self):
-        self.ds9 = pyds9.DS9()
-        self.minimum_pan = 0.1 * units.arcsec
-        self.ds9.set('frame delete all')
+        self.minimum_pan = 10 * units.arcsec
+        while True:
+            try:
+                self.ds9 = pyds9.DS9('validate')
+                self.ds9.set('frame delete all')
+                self.ds9.set('frame new')
+                break
+            except ValueError as ex:
+                logging.critical(f"Waiting for ds9 to start: {ex}")
+                time.sleep(2)
+        self.current_centre = SkyCoord(0,0, unit=units.degree)
         self.initialize()
 
     def next_frame(self):
@@ -72,12 +80,31 @@ class Display(object):
         """
         Display the image in ds9.
         """
-        with contextlib.closing(BytesIO()) as newFitsFile:
-            hdulist.writeto(newFitsFile)
-            newfits = newFitsFile.getvalue()
-            got = self.ds9.set('fits new mosaicimage wcs', newfits, len(newfits))
-        self.ds9.set('zoom to 4')
-        self.ds9.set('wcs align yes')
+        if hdulist is not None:
+            # Get centre of
+            with contextlib.closing(BytesIO()) as newFitsFile:
+                hdulist.writeto(newFitsFile)
+                newfits = newFitsFile.getvalue()
+                got = self.ds9.set('fits mosaicimage wcs', newfits, len(newfits))
+                self.ds9.set('zoom to 4')
+                self.ds9.set('wcs align yes')
+        else:
+            self.ds9.set('frame new')
+        return int(self.ds9.get('frame frameno'))
+
+    def load(self, hdulist) -> int:
+        """
+        Display the image in ds9.
+        """
+        if hdulist is not None:
+            with contextlib.closing(BytesIO()) as newFitsFile:
+                hdulist.writeto(newFitsFile)
+                newfits = newFitsFile.getvalue()
+                got = self.ds9.set('fits new mosaicimage wcs', newfits, len(newfits))
+                self.ds9.set('zoom to 4')
+                self.ds9.set('wcs align yes')
+        else:
+            self.ds9.set('frame new')
         return int(self.ds9.get('frame frameno'))
 
     def pan(self, ra, dec):
@@ -99,23 +126,22 @@ class Display(object):
 
     @focus.setter
     def focus(self, focus):
-        if not focus:
-            return
         try:
-            if isinstance(focus, SkyCoord):
+            if not isinstance(focus, SkyCoord):
+                focus = SkyCoord(focus[0], focus[1])
+            if self.focus is None or focus.separation(self.focus) > self.minimum_pan:
                 self._focus = focus
-            else:
-                self._focus = SkyCoord(focus[0], focus[1])
+            self.ds9.set("pan to {} {} wcs fk5".format(self.focus.ra.degree,
+                                                       self.focus.dec.degree))
         except Exception as ex:
-            logging.error("Focus setting failed to convert focus tuple {} to SkyCoord: {}".format(focus, ex))
-            self._focus = focus
+            logging.error("Focus setting failed {focus}")
+            self._focus = None
 
     def _do_move_focus(self):
         if self.focus is None:
             return
-        if not self.aligned:
-            self.ds9.set("pan to {} {} wcs fk5".format(self.focus.ra.degree,
-                                                           self.focus.dec.degree))
+        self.ds9.set("pan to {} {} wcs fk5".format(self.focus.ra.degree,
+                                                   self.focus.dec.degree))
 
     def pan_to(self, pos):
         self.focus = pos
@@ -146,13 +172,17 @@ class Display(object):
     def resolve_mosaic_extension(self, ra: Quantity, dec: Quantity) -> dict:
         """determine which of the extension in a mosaic of extensions the selected source is in and return
         the extension name and x/y location of source."""
-        for header in self.headers:
-            this_wcs = WCS(header)
-            x, y = this_wcs.sky2xy(ra, dec, usepv=True)
-            contains_pixel = 0 < x < header['NAXIS1'] and 0 < y < header['NAXIS2']
-            if contains_pixel:
-                return {'extname': header['EXTNAME'], 'x': x, 'y': y}
-        raise DisplayError("Could not match RA/DEC returned by iexem to value inside image.")
+        try:
+            for header in self.headers:
+                this_wcs = WCS(header)
+                x, y = this_wcs.sky2xy(ra, dec, usepv=True)
+                contains_pixel = 0 < x < header['NAXIS1'] and 0 < y < header['NAXIS2']
+                if contains_pixel:
+                    return {'extname': header['EXTNAME'], 'x': x, 'y': y}
+        except Exception as ex:
+            logging.debug(f"Error resolving mosaic extension: {type(ex)} -> {str(ex)}")
+        logging.warning("Could not match RA/DEC returned by iexem to value inside image.")
+        return {'extname': None, 'x': None, 'y': None}
 
     @property
     def headers(self) -> list[fits.Header]:

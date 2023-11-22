@@ -22,7 +22,10 @@ class VOSpaceDownloader:
 
     def __call__(self, *args, **kwargs):
         self.check_schema(kwargs['uri'])
-        result = self.get_bytes_from_vospace(kwargs['uri'])
+        try:
+            result = self.get_bytes_from_vospace(kwargs['uri'])
+        except HTTPError as e:
+            logging.error(f"HTTP error: {e} on {kwargs['uri']}")
         return result
 
     @staticmethod
